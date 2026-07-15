@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  labels:
+    app: proxy
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      containers:
+        - name: proxy
+          image: ghcr.io/kacper-przybyla/task-manager-proxy:latest
+          ports:
+          - containerPort: 80
+          volumeMounts:
+          - name: config-file
+            mountPath: /etc/nginx/conf.d/default.conf
+            subPath: default.conf
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi 
+      volumes:
+      - name: config-file
+        configMap:
+          name: proxy-config
