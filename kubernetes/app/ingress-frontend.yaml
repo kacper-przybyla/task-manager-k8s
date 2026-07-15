@@ -5,10 +5,16 @@ metadata:
   namespace: app
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    cert-manager.io/cluster-issuer: issuer
 spec:
   ingressClassName: nginx
+  tls:
+  - hosts:
+    - taskmanager.local
+    secretName: taskmanager-tls
   rules:
-  - http:
+  - host: taskmanager.local
+    http:
       paths:
       - path: /
         pathType: Prefix
