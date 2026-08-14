@@ -1,0 +1,9 @@
+backend:
+  image:
+    tag: 8c4260c 
+  replicas: 2
+
+frontend:
+  image:
+    tag: 8c4260c
+  replicas: 2
