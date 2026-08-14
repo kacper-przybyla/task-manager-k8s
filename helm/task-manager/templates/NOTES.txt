@@ -1,0 +1,20 @@
+Secret that must exist BEFORE installing this chart:
+  {{ .Values.postgres.secretName }}
+  {{ .Values.backend.secretName }}
+
+{{ .Values.postgres.secretName }} with keys:
+  POSTGRES_USER: "example-user"
+  POSTGRES_PASSWORD: "example-password"
+  POSTGRES_DB: "taskdb_prod"
+
+and {{ .Values.backend.secretName }} with key:
+  DATABASE_URL: "postgresql+psycopg2://example-url"
+
+You can do it with command:
+  kubectl create secret generic <name> \
+    --from-literal=<KEY1>=<value1> \
+    --from-literal=<KEY2>=<value2> \
+    -n <namespace>
+
+You successfully installed this chart! 
+Visit: https://{{ .Values.ingress.hostname }}

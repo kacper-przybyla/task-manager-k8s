@@ -1,0 +1,13 @@
+backend:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 125m
+      memory: 128Mi
+
+frontend:
+  replicas: 1
+
+ingress:
+  tls:
+    enabled: false
