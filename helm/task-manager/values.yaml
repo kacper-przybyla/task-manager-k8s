@@ -1,0 +1,76 @@
+namespace: taskmngr
+
+postgres:
+  image:
+    repository: postgres
+    tag: "14"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 125m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  storage:
+    size: 1Gi
+  service:
+    port: 5432
+    targetPort: 5432
+  secretName: postgres-secret
+
+backend:
+  image:
+    repository: ghcr.io/kacper-przybyla/task-manager-backend
+    tag: "latest"
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    port: 8000
+    targetPort: 8000
+  probes:
+    livenessProbe:
+      path: /health
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      failureThreshold: 3
+    readinessProbe:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      failureThreshold: 3
+  config:
+    ENVIRONMENT: "production"
+  secretName: backend-secret
+
+frontend:
+  image:
+    repository: ghcr.io/kacper-przybyla/task-manager-frontend
+    tag: "latest"
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  service:
+    port: 80
+    targetPort: 80
+
+ingress:
+  hostname: taskmanager.local
+  className: nginx
+  tls:
+    enabled: true
+    secretName: taskmanager-tls
+  clusterIssuer: issuer
+  backendRewriteTarget: /$2
+  sslRedirect: "false"

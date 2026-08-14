@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-backend
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "task-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "task-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      initContainers:
+      - name: pg-ready-init
+        image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+        command: ["sh", "-c", "until pg_isready -h {{ .Release.Name }}-postgres -p {{ .Values.postgres.service.targetPort }} -U postgres -d taskdb_prod; do echo 'waiting...'; sleep 2; done"]
+      containers:
+      - name: backend
+        image: {{ .Values.backend.image.repository}}:{{ .Values.backend.image.tag }}
+        ports:
+        - containerPort: {{ .Values.backend.service.targetPort }}
+        envFrom:
+          - configMapRef:
+              name: {{ .Release.Name }}-backend-config
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.backend.secretName }}
+              key: DATABASE_URL
+        resources:
+          {{- toYaml .Values.backend.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.backend.probes.livenessProbe.path}}
+            port: {{ .Values.backend.service.targetPort }}
+          initialDelaySeconds: {{ .Values.backend.probes.livenessProbe.initialDelaySeconds}}
+          periodSeconds: {{ .Values.backend.probes.livenessProbe.periodSeconds}}
+          failureThreshold: {{ .Values.backend.probes.livenessProbe.failureThreshold}}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.backend.probes.readinessProbe.path}}
+            port: {{ .Values.backend.service.targetPort }}
+          initialDelaySeconds: {{ .Values.backend.probes.readinessProbe.initialDelaySeconds}}
+          periodSeconds: {{ .Values.backend.probes.readinessProbe.periodSeconds}}
+          failureThreshold: {{ .Values.backend.probes.readinessProbe.failureThreshold}}
