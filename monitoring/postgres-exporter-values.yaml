@@ -1,0 +1,9 @@
+config:
+  datasourceSecret:
+    name: postgres-exporter-secret
+    key: postgres-monitoring
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring
