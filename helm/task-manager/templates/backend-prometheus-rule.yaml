@@ -1,0 +1,40 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+
+metadata:
+  name: {{ .Release.Name }}-backend-alerts
+  namespace: {{ .Values.namespace }}
+
+  labels:
+    release: monitoring
+
+spec:
+  groups:
+    - name: taskmngr-backend
+      rules:
+        - alert: PodDown
+          expr: up{job="taskmngr-backend-service"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Task Manager backend is down"
+        - alert: HighMemoryUsage
+          expr: |
+            container_memory_working_set_bytes{
+            namespace="taskmngr",
+            pod=~"taskmngr-backend-.*"
+            }
+            /
+            on(namespace, pod)
+            kube_pod_container_resource_limits{
+            namespace="taskmngr",
+            resource="memory",
+            unit="byte"
+            }
+            > 0.9
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Task manager backend RAM usage is above 90%"
