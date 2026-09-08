@@ -1,6 +1,6 @@
 # task-manager-k8s
 
-A Kubernetes portfolio project with two complete, working deployment paths for the same web application: hand-written raw manifests and a parameterized Helm chart.
+A Kubernetes portfolio project with two complete, working deployment paths for the same web application: hand-written raw manifests and a parameterized Helm chart, the latter backed by a full Prometheus/Loki observability stack.
 
 ## Authorship and scope
 
@@ -10,45 +10,55 @@ Everything in this repository — the Kubernetes manifests, the Helm chart and a
 
 ```
 task-manager-k8s/
-├── kubernetes/                        # Deployment path 1: raw manifests
-│   ├── namespace.yaml
-│   ├── cert-manager/
-│   │   └── issuer.yaml
-│   └── app/
-│       ├── postgres-statefulset.yaml
-│       ├── postgres-service.yaml
-│       ├── postgres-secret.example.yaml
-│       ├── backend-deployment.yaml
-│       ├── backend-service.yaml
-│       ├── backend-configmap.yaml
-│       ├── backend-secret.example.yaml
-│       ├── frontend-deployment.yaml
-│       ├── frontend-service.yaml
-│       ├── proxy-deployment.yaml
-│       ├── proxy-service.yaml
-│       ├── proxy-configmap.yaml
-│       ├── ingress-backend.yaml
-│       └── ingress-frontend.yaml
-└── helm/task-manager/                 # Deployment path 2: Helm chart
-    ├── Chart.yaml                     # version: 0.1.1, appVersion: 1.3.1
-    ├── values.yaml
-    ├── values-dev.yaml
-    ├── values-prod.yaml
-    └── templates/
-        ├── _helpers.tpl
-        ├── postgres-statefulset.yaml
-        ├── postgres-service.yaml
-        ├── backend-deployment.yaml
-        ├── backend-service.yaml
-        ├── backend-configmap.yaml
-        ├── frontend-deployment.yaml
-        ├── frontend-service.yaml
-        ├── ingress-backend.yaml
-        ├── ingress-frontend.yaml
-        ├── pre-upgrade-hook.yaml
-        ├── backend-health-test.yaml
-        └── NOTES.txt
+├── kubernetes/ # Deployment path 1: raw manifests
+│ ├── namespace.yaml
+│ ├── cert-manager/
+│ │ └── issuer.yaml
+│ └── app/
+│ ├── postgres-statefulset.yaml
+│ ├── postgres-service.yaml
+│ ├── postgres-secret.example.yaml
+│ ├── backend-deployment.yaml
+│ ├── backend-service.yaml
+│ ├── backend-configmap.yaml
+│ ├── backend-secret.example.yaml
+│ ├── frontend-deployment.yaml
+│ ├── frontend-service.yaml
+│ ├── proxy-deployment.yaml
+│ ├── proxy-service.yaml
+│ ├── proxy-configmap.yaml
+│ ├── ingress-backend.yaml
+│ └── ingress-frontend.yaml
+├── helm/task-manager/ # Deployment path 2: Helm chart
+│ ├── Chart.yaml # version: 0.1.1, appVersion: 1.3.1
+│ ├── values.yaml
+│ ├── values-dev.yaml
+│ ├── values-prod.yaml
+│ └── templates/
+│ ├── _helpers.tpl
+│ ├── postgres-statefulset.yaml
+│ ├── postgres-service.yaml
+│ ├── backend-deployment.yaml
+│ ├── backend-service.yaml
+│ ├── backend-configmap.yaml
+│ ├── backend-servicemonitor.yaml
+│ ├── backend-prometheus-rule.yaml
+│ ├── frontend-deployment.yaml
+│ ├── frontend-service.yaml
+│ ├── ingress-backend.yaml
+│ ├── ingress-frontend.yaml
+│ ├── pre-upgrade-hook.yaml
+│ ├── backend-health-test.yaml
+│ └── NOTES.txt
+└── monitoring/ # Observability stack (path 2 only)
+  ├── kube-prometheus-stack-values.yaml
+  ├── postgres-exporter-values.yaml
+  ├── loki-values.yaml
+  ├── alloy-values.yaml
+  └── dashboards/
+    └── task-manager.json
 ```
+
 
 ## Why two deployment paths
 
@@ -56,7 +66,7 @@ The `kubernetes/` directory and the `helm/task-manager/` chart deploy the same a
 
 Writing raw manifests requires understanding every field explicitly: what `clusterIP: None` does to DNS, why a StatefulSet needs `volumeClaimTemplates` instead of a plain volume, what annotation scope means for an Ingress resource. There is no abstraction layer to fill in the gaps.
 
-The Helm chart then shows how to take those working manifests and make them environment-aware: what belongs in `values.yaml`, how overlay files compose, what to protect with lifecycle hooks, and how to structure templates so that a name change to the Helm release propagates correctly through all resources.
+The Helm chart then shows how to take those working manifests and make them environment-aware: what belongs in `values.yaml`, how overlay files compose, what to protect with lifecycle hooks, and how to structure templates so that a name change to the Helm release propagates correctly through all resources. The observability stack (`monitoring/`) builds on top of the Helm chart path specifically — the raw-manifest path has no `ServiceMonitor` or `PrometheusRule` equivalent.
 
 ## Architecture
 
@@ -85,7 +95,7 @@ Postgres requires stable, predictable storage and network identity across restar
 
 A StatefulSet provides a `volumeClaimTemplates` block, which provisions a dedicated PVC per pod (`ReadWriteOnce`, 1 Gi). The data volume follows the pod through rescheduling — a plain Deployment with a `volumes:` reference to a PVC would not guarantee the same pod lands on the same volume.
 
-The postgres Service sets `clusterIP: None` (headless). The StatefulSet controller requires a headless Service as its `serviceName` in order to create per-pod DNS records of the form `postgres-0.postgres.<namespace>.svc.cluster.local`. With `clusterIP: None`, the Service does not proxy or load-balance; it resolves directly to the pod IP. This is correct for a single-replica database where traffic must go to the specific pod, not an arbitrary endpoint chosen by kube-proxy.
+The postgres Service sets `clusterIP: None` (headless). The StatefulSet controller requires a headless Service as its `serviceName` in order to create per-pod DNS records of the form `postgres-0.postgres.<namespace>.svc.cluster.local`. With `clusterIP: None`, the Service does not proxy or load-balance; it resolves directly to the pod IP. This is correct for a single-replica database where traffic must go to the specific pod, not an arbitrary endpoint chosen by kube-proxy. It also means that if the pod goes away entirely, the hostname fails DNS resolution outright rather than returning a stale or refused connection — the failure mode we deliberately reproduced to verify metric/log correlation (see Monitoring below).
 
 ### Why backend and frontend are Deployments with ClusterIP Services
 
@@ -127,17 +137,17 @@ Both deployment paths require:
 
 - A running Kubernetes cluster. The commands below assume [minikube](https://minikube.sigs.k8s.io/).
 - The nginx Ingress controller:
-  ```bash
+```bash
   minikube addons enable ingress
-  ```
+```
 - cert-manager (v1.x):
-  ```bash
+```bash
   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-  ```
+```
 - A `/etc/hosts` entry so `taskmanager.local` resolves to the minikube node:
-  ```bash
+```bash
   echo "$(minikube ip) taskmanager.local" | sudo tee -a /etc/hosts
-  ```
+```
 
 ## Required Secrets
 
@@ -167,11 +177,11 @@ kubectl create secret generic postgres-secret \
   -n taskmngr
 
 kubectl create secret generic backend-secret \
-  --from-literal=DATABASE_URL="postgresql+psycopg2://<user>:<password>@task-manager-postgres:5432/<database-name>" \
+  --from-literal=DATABASE_URL="postgresql+psycopg2://<user>:<password>@taskmngr-postgres:5432/<database-name>" \
   -n taskmngr
 ```
 
-In the Helm chart the postgres Service is named `{{ .Release.Name }}-postgres`. With the release name `task-manager` (used in the commands below), the hostname is `task-manager-postgres`.
+In the Helm chart the postgres Service is named `{{ .Release.Name }}-postgres`. With the release name `taskmngr` (used throughout this README), the hostname is `taskmngr-postgres`.
 
 ## Deployment path 1: raw Kubernetes manifests
 
@@ -201,7 +211,9 @@ kubectl get svc proxy -n app        # note the NodePort value
 curl http://$(minikube ip):<nodePort>/
 ```
 
-## Deployment path 2: Helm chart
+This path has no observability stack — Prometheus/Loki are wired into the Helm chart's own `ServiceMonitor`/`PrometheusRule` templates, which the raw manifests don't have an equivalent for.
+
+## Deployment path 2: Helm chart + observability stack
 
 ### What the chart adds over the raw manifests
 
@@ -222,7 +234,7 @@ The hook is cleaned up automatically (`hook-delete-policy: before-hook-creation,
 
 **Test hook**
 
-`backend-health-test.yaml` is a Pod with the annotation `helm.sh/hook: test`. Running `helm test task-manager` starts this Pod, which uses `curl` to call the backend's `/health` endpoint from inside the cluster. A zero exit code confirms the backend is reachable after installation.
+`backend-health-test.yaml` is a Pod with the annotation `helm.sh/hook: test`. Running `helm test taskmngr` starts this Pod, which uses `curl` to call the backend's `/health` endpoint from inside the cluster. A zero exit code confirms the backend is reachable after installation.
 
 **External-secrets pattern**
 
@@ -236,40 +248,107 @@ backend:
   secretName: backend-secret
 ```
 
-The templates reference these names. The Secrets themselves must be created externally before installation, as shown in the Required Secrets section above.
+The templates reference these names. The Secrets themselves must be created externally before installation, as shown in the Required Secrets section above. The same pattern governs every credential in `monitoring/` below — Grafana's admin login, the Postgres exporter's connection string — none of them are committed in plaintext.
 
-### Quickstart
+### What the observability stack adds
+
+- **kube-prometheus-stack** (Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics) via the community Helm chart, values in `monitoring/kube-prometheus-stack-values.yaml`. Grafana's admin credentials come from an externally-created Secret (`grafana-admin-secret`).
+- **Custom scraping of the application** via a `ServiceMonitor` in the app chart itself (`helm/task-manager/templates/backend-servicemonitor.yaml`) — the backend exposes `/metrics` through `prometheus-fastapi-instrumentator`.
+- **PostgreSQL metrics** via `prometheus-postgres-exporter`, connecting as a dedicated `monitoring_user` role (`pg_monitor` grant, read-only) rather than the application's own read/write credentials.
+- **Alerting**: two `PrometheusRule` alerts (`backend-prometheus-rule.yaml`: `PodDown`, `HighMemoryUsage`) evaluated by Prometheus and routed through Alertmanager, with a dedicated child route for `severity: critical` alerts. No real Slack workspace is wired in for this portfolio — routing and grouping were verified directly in Alertmanager's own UI.
+- **Log aggregation** via Loki (`monitoring/loki-values.yaml`, single-binary mode, filesystem storage) and Grafana Alloy (`monitoring/alloy-values.yaml`) as the collector — Alloy rather than Promtail, which is now in Grafana's maintenance mode. Loki runs with multi-tenancy enabled; both Alloy's writes and Grafana's reads use the tenant `fake` via the `X-Scope-OrgID` header.
+- **A custom Grafana dashboard** (`monitoring/dashboards/task-manager.json`) covering backend pod status, CPU, memory, Postgres status/connections/size, pod restarts, and live backend logs — provisioned as code via Helm values (`grafana.dashboardProviders` + `--set-file`). Mounted via `subPath`, so it does not auto-update from a ConfigMap edit; changes require re-running the `--set-file` upgrade.
+- **Verified metric-log correlation**: the database was deliberately taken offline (`kubectl scale statefulset taskmngr-postgres --replicas=0`) with the dashboard open, confirming `pg_up`/`PostgreSQL Status` drop and backend DNS-resolution error logs appear in the same window.
+
+### Install order matters
+
+The app chart's `ServiceMonitor` and `PrometheusRule` objects depend on CRDs that `kube-prometheus-stack` installs. **The observability stack must go in before the app chart** — installing the app chart first fails outright (`no matches for kind "ServiceMonitor"`), by design: this is a hard dependency, not a feature that silently degrades. The sequence below reflects that.
+
+### Full install sequence
 
 ```bash
-# 1. Apply the ClusterIssuer
+# 1. Cluster-level prerequisites (see Prerequisites above), then:
 kubectl apply -f kubernetes/cert-manager/issuer.yaml
-
-# 2. Create the namespace
 kubectl create namespace taskmngr
+kubectl create namespace monitoring
 
-# 3. Create Secrets (see Required Secrets above)
+# 2. Application Secrets (see Required Secrets above)
+kubectl create secret generic postgres-secret \
+  --from-literal=POSTGRES_USER=<user> \
+  --from-literal=POSTGRES_PASSWORD=<password> \
+  --from-literal=POSTGRES_DB=<database-name> \
+  -n taskmngr
 
-# 4. Install the chart
-helm install task-manager ./helm/task-manager --namespace taskmngr
+kubectl create secret generic backend-secret \
+  --from-literal=DATABASE_URL="postgresql+psycopg2://<user>:<password>@taskmngr-postgres:5432/<database-name>" \
+  -n taskmngr
 
-# Or with the dev overlay (no TLS, lower resource requests, 1 frontend replica):
-helm install task-manager ./helm/task-manager --namespace taskmngr \
-  -f helm/task-manager/values-dev.yaml
+# 3. Grafana's admin credentials
+kubectl create secret generic grafana-admin-secret \
+  --from-literal=admin-user=admin \
+  --from-literal=admin-password='<pick-something>' \
+  -n monitoring
 
-# Or with the prod overlay (pinned image tags, 2 replicas each):
-helm install task-manager ./helm/task-manager --namespace taskmngr \
-  -f helm/task-manager/values-prod.yaml
+# 4. Add chart repos
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
 
-# 5. Verify
+# 5. Install the observability stack — MUST come before step 8
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --version 88.5.0 \
+  -n monitoring \
+  -f monitoring/kube-prometheus-stack-values.yaml \
+  --set-file grafana.dashboards.default.task-manager-overview.json=monitoring/dashboards/task-manager.json
+
+helm install loki grafana/loki -n monitoring -f monitoring/loki-values.yaml
+helm install alloy grafana/alloy -n monitoring -f monitoring/alloy-values.yaml
+
+# 6. Install the app chart first (so Postgres exists before step 7 needs it)
+helm install taskmngr ./helm/task-manager --namespace taskmngr
+# Or with an overlay:
+#   -f helm/task-manager/values-dev.yaml   (no TLS, lower resources, 1 frontend replica)
+#   -f helm/task-manager/values-prod.yaml  (pinned image tags, 2 replicas each)
+
+# 7. Create the dedicated read-only monitoring role in Postgres
+kubectl exec -it taskmngr-postgres-0 -n taskmngr -- psql -U postgres -d <database-name>
+   CREATE USER monitoring_user WITH PASSWORD '<password>';
+   GRANT pg_monitor TO monitoring_user;
+   GRANT CONNECT ON DATABASE <database-name> TO monitoring_user;
+   \q
+
+# 8. Create the exporter's connection secret and install it
+kubectl create secret generic postgres-exporter-secret \
+  --from-literal=DATA_SOURCE_NAME="postgresql://monitoring_user:<password>@taskmngr-postgres.taskmngr.svc.cluster.local:5432/<database-name>?sslmode=disable" \
+  -n monitoring
+
+helm install postgres-exporter prometheus-community/prometheus-postgres-exporter \
+  -n monitoring -f monitoring/postgres-exporter-values.yaml
+
+# 9. Verify
 kubectl get all -n taskmngr
-helm status task-manager --namespace taskmngr
-
-# 6. Run the test hook
-helm test task-manager --namespace taskmngr
-
-# Upgrading (pre-upgrade hook runs automatically before new pods are scheduled):
-helm upgrade task-manager ./helm/task-manager --namespace taskmngr \
-  -f helm/task-manager/values-prod.yaml
+kubectl get all -n monitoring
+helm status taskmngr --namespace taskmngr
+helm test taskmngr --namespace taskmngr
 ```
 
 With the default or prod values, TLS is enabled and the app is available at `https://taskmanager.local`. With the dev overlay, TLS is disabled — use `http://taskmanager.local`.
+
+**Upgrading** the app chart (the pre-upgrade hook runs automatically before new pods are scheduled):
+```bash
+helm upgrade taskmngr ./helm/task-manager --namespace taskmngr \
+  -f helm/task-manager/values-prod.yaml
+```
+
+### Access
+
+```bash
+kubectl port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 -n monitoring    # Prometheus
+kubectl port-forward svc/monitoring-kube-prometheus-alertmanager 9093:9093 -n monitoring  # Alertmanager
+kubectl port-forward svc/monitoring-grafana 3001:80 -n monitoring                          # Grafana
+```
+Logs are queried through Grafana's Explore view (Loki datasource) or directly on the dashboard's "Backend logs" panel — there is no separate Loki UI to expose.
+
+### Status
+
+Metrics, alerting, dashboard-as-code, and log aggregation are complete and verified end-to-end, including a deliberate outage used to confirm metric/log correlation.
