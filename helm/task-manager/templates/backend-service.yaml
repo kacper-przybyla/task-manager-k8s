@@ -5,6 +5,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "task-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
 spec:
   selector:
     {{- include "task-manager.selectorLabels" . | nindent 4}}

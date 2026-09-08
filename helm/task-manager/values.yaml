@@ -47,6 +47,8 @@ backend:
       failureThreshold: 3
   config:
     ENVIRONMENT: "production"
+  serviceMonitor:
+    enabled: true
   secretName: backend-secret
 
 frontend:

@@ -1,0 +1,17 @@
+{{- if .Values.backend.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-backend-monitor
+  namespace: {{ .Values.namespace }}
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      {{- include "task-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  endpoints:
+    - port: backend-port
+      path: /metrics
+{{- end }}
